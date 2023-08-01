@@ -16,10 +16,10 @@ def main(seedKG_path='../FR2KG/seedKG', make_new=True):
     
     g = Graph('bolt://192.168.1.35:7687', name = 'neo4j', password='neo')
 
-    if make_new:
-        # 先删除原有图谱
-        g.run(f"match ()-[r]-() delete r")
-        g.run(f"match (n) delete n")
+    # if make_new:
+    #     # 先删除原有图谱
+    #     g.run(f"match ()-[r]-() delete r")
+    #     g.run(f"match (n) delete n")
 
     with open(os.path.join('../FR2KG/schema.json'), 'r') as f:
         schema = json.load(f)
@@ -54,4 +54,4 @@ def main(seedKG_path='../FR2KG/seedKG', make_new=True):
     
 if __name__ == '__main__':
     seedKG_path = '../FR2KG/evaluationKG'
-    main()
+    main(seedKG_path)
