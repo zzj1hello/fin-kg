@@ -1,9 +1,11 @@
 import collections
+from copy import deepcopy
 from datetime import datetime
 import math
 from itertools import combinations
 import heapq
 
+# import json
 
 # bleu 和 编辑距离 用于计算相似度
 def bleu(ner, ent):
@@ -68,7 +70,15 @@ class QuestionParser:
         self.max_return = 15 # 对路径查询限制路径条数 
         self.max_return_2 = 5
         
-    def question2sql(self, question, ent_dict):
+        # stuck_data = json.dumps(self.knowledge['个股'], ensure_ascii=False)
+        # with open('stuck_data.json', 'w') as file:
+        #     file.write(stuck_data)
+            
+        # indu_data = json.dumps(self.knowledge['行业'])
+        # with open('indu_data.json', 'w') as file:
+        #     file.write(indu_data)
+
+    def question2sql(self, question, ent_dict, times):
         
         sql_dict = collections.defaultdict(list) # {返回类型: 查询语句}
 
@@ -89,8 +99,8 @@ class QuestionParser:
                         basic_ent[subject].append(kg_subject)
                     else:
                         basic_ent[subject][-1] = kg_subject 
-                    break
-                scores_cur = editing_distance(kg_subject, match_subject[0]) if subject!='财务指标_发布时间' \
+                    break                
+                scores_cur = editing_distance(kg_subject, match_subject[0]) if not subject.startswith('财务指标_发布时间') \
                     else -bleu(kg_subject[:len(match_subject[0])], match_subject[0])
                 if scores_cur < scores_best:
                     if flag:
@@ -119,34 +129,41 @@ class QuestionParser:
         # 选出最匹配的时间 为空则使用近一年的
         extraction_time = ent_dict.get('发布时间')
         if len(extraction_time) == 0 or extraction_time[0] == '':
-            basic_ent['财务指标_发布时间'] = self.knowledge['近一年']
+            for subject, sj_time in times.items():
+                basic_ent[f'财务指标_发布时间_{subject}'] = ['2022', '2023', ''] # heapq.nlargest(3, sj_time)
         else:
-            for e_time in extraction_time:
-                if e_time:
-                    e_time_trans = [e_time, ]
-                    try: # 用户给到某年某月某日  精确
-                        e_time_trans.append(datetime.strptime(e_time, "%Y年%m月%d日").strftime("%Y-%m-%d"))
-                        match_helper(e_time_trans, '财务指标_发布时间')
-                    except:
-                        try: # 用户给到某年某月 模糊
-                            monthly = datetime.strptime(e_time, "%Y年%m月").strftime("%Y-%m")
-                            basic_ent['财务指标_发布时间'].append(monthly)
+            for subject, sj_time in times.items():
+                self.knowledge[f'财务指标_发布时间_{subject}'] = sj_time
+                for e_time in extraction_time: # 保证用户想要的时间只有一个 图谱中有该主体最接近的时间
+                    if e_time:
+                        e_time_trans = []
+                        # e_time_trans = [e_time, ]
+                        try: # 用户给到某年某月某日  精确
+                            ymd = datetime.strptime(e_time, "%Y年%m月%d日").strftime("%Y-%m-%d")
+                            e_time_trans.append(ymd)
                         except:
-                            try: # 用户给到某年 精确
-                                nianbao = datetime.strptime(e_time, "%Y年").strftime("%Y")
-                                basic_ent['财务指标_发布时间'].append(f'{nianbao}-12-31')
+                            try: # 用户给到某年某月 模糊
+                                ym = datetime.strptime(e_time, "%Y年%m月").strftime("%Y-%m")
+                                basic_ent[f'财务指标_发布时间_{subject}'].append(ym)
                             except:
-                                match_helper(e_time_trans, '财务指标_发布时间')
-                                basic_ent['财务指标_发布时间'].append(e_time)
-
-                    
-
+                                try: # 用户给到某年 模糊
+                                    nianbao = datetime.strptime(e_time, "%Y年").strftime("%Y")
+                                    basic_ent[f'财务指标_发布时间_{subject}'].append(f'{nianbao}-12-31')
+                                except:
+                                    e_time_trans.append(e_time) # 精确
+                                    basic_ent[f'财务指标_发布时间_{subject}'].append(e_time) # 模糊
+                        if sj_time == []:
+                            for tm in e_time_trans:
+                                basic_ent[f'财务指标_发布时间_{subject}'].append(tm)
+                        elif not basic_ent[f'财务指标_发布时间_{subject}']:
+                            match_helper(e_time_trans, f'财务指标_发布时间_{subject}')
+        
         # 用户意图  找出最相关的几个意图作为属性条件
         intent_match = set()
         extraction_intent = ent_dict.get('intent', [])
         for e_intent in extraction_intent:  
             for key in ['属性', '关系', '实体']:
-                if key == '关系':  # 
+                if key == '关系':  # 关系匹配需要准确 否则查询出来很多 故给定0.5的阈值
                     tmp_scores_bleu = {kg_attr: bleu(kg_attr, e_intent) for kg_attr in self.knowledge[key]}
                     topk = heapq.nlargest(1, tmp_scores_bleu.items(), key=lambda x: x[1])
                 else:
@@ -156,17 +173,21 @@ class QuestionParser:
                     intent_match.add(topk[0][0])
                     break
                 else:
-                    intent_match.update({kg_attr for kg_attr, score in topk if kg_attr not in ['name', '个股'] and \
-                        score<len(e_intent) and score>0})
+                    intent_match.update({kg_attr for kg_attr, score in topk if kg_attr not in ['name'] and \
+                        score<len(e_intent) and score>0.5}) # not in ['name', '个股']
 
         # 单节点查询：意图为单一结点的属性 直接返回该节点信息 并剔除查询该节点类型的意图
+        intent_match_tmp = deepcopy(intent_match)
+        intent_match_tmp -= {'个股'} # 个股既是实体 也是属性 需要排除
         single_ent = []
         for key, vals in self.knowledge['单节点属性'].items():
-            rm_val = vals & intent_match # 交集
+            rm_val = vals & intent_match_tmp # 交集
             if rm_val:
                 single_ent.append(key)     # 并集保存 查询节点类型
-                intent_match -= rm_val # 剔除该意图
-                if key not in intent_match:
+                intent_match_tmp -= rm_val # 剔除该意图
+                intent_match -= rm_val
+                if key in intent_match:
+                    intent_match_tmp -= {key}    # 剔除该节点类型意图
                     intent_match -= {key}    # 剔除该节点类型意图
         
         # 按关系选择路径
@@ -178,35 +199,68 @@ class QuestionParser:
                 single_path.append(rel)     # 并集保存 查询节点类型
             intent_match -= rel_rm # 剔除该意图            
 
-        
+        # for subject_type in ('个股', '行业'): # 此查询会重复查询公共路径 速度慢
+        #     for subject in set(basic_ent.get(subject_type)):
+        #         for time in basic_ent.get(f'财务指标_发布时间_{subject}'):
+        #             for ent_type in single_ent: # 单节点查询 返回节点类型 节点属性
+        #                 sql_dict['node'].append([f'{subject}在{time}的信息如下\n', f"match path=(n)-[*1..3]->(m:`{ent_type}`) where n.name='{subject}' and \
+        #                                             all(node in nodes(path) where (node.发布时间 is null or node.发布时间=~'{time}.*')) \
+        #                                             return distinct labels(m)[0], properties(m) LIMIT 1"])
+        #             for rel in single_path:
+        #                 for _, tail in self.knowledge['关系三元组'][rel]:
+        #                     if rel == '基本面':
+        #                         for tail2 in self.knowledge['关系三元组辅助'][tail]:
+        #                             sql_dict['node'].append([f'{subject}在{time}的信息如下\n', f"match path=(n)-[*1..3]->(m:`{tail2}`) where n.name='{subject}' and \
+        #                                                         all(node in nodes(path) where (node.发布时间 is null or node.发布时间=~'{time}.*')) \
+        #                                                         return distinct labels(m)[0], properties(m) LIMIT 1"])
+        #                     else:
+        #                         sql_dict['node'].append([f'{subject}在{time}的信息如下\n', f"match path=(n)-[*1..3]->(m:`{tail}`) where n.name='{subject}' and \
+        #                             all(node in nodes(path) where (node.发布时间 is null or node.发布时间=~'{time}.*')) \
+        #                             return distinct labels(m)[0], properties(m) LIMIT 1"])
+
+        #             for intent in intent_match:
+        #                 sql_dict['node'].append([f'{subject}在{time}的信息如下\n', f"match path=(n)-[*1..3]->(m:`{intent}`) where n.name='{subject}' and \
+        #                                             all(node in nodes(path) where (node.发布时间 is null or node.发布时间=~'{time}.*')) \
+        #                                             return distinct labels(m)[0], properties(m) LIMIT 1"])
+        # return sql_dict
+
+        def help(time):
+            return 'limit 3' if time == '' else ''
         # 根据将主体作为首节点 时间和用户意图作为条件进行路径查询
         for subject_type in ('个股', '行业'):
             for subject in set(basic_ent.get(subject_type, [])):
 
-                for time in basic_ent.get('财务指标_发布时间', []):
+                for time in basic_ent.get(f'财务指标_发布时间_{subject}'):
                     for ent_type in single_ent: # 单节点查询 返回节点类型 节点属性
-                        sql_dict['node'].append( f"match (n:`{ent_type}`) WHERE n.name='{subject}' AND n.发布时间=~'{time}.*' \
-                                                    return distinct labels(n)[0], properties(n)")
-                        
+                        sql_dict['node'].append([f'{subject}在{time}的信息如下\n', f"match (n:`{ent_type}`) WHERE (n.name='{subject}' or \
+                                                        n.个股='{subject}') AND (n.发布时间 is null or n.发布时间=~'{time}.*') \
+                                                    return distinct labels(n)[0], properties(n)"+help(time)])
                     for rel in single_path: # 按关系选择路径 限制时间
                         if rel == '评价':
-                            sql_dict['path'].insert(0,  f"match path=(n)-[s]-(p)-[r:`评价`]-(m) WHERE n.name='{subject}' and \
+                            sql_dict['path'].insert(0, [f'{subject}在{time}的信息如下\n', f"match path=(n)-[s]-(p)-[r:`评价`]-(m) WHERE n.name='{subject}' and \
                                                             (m.发布时间 IS NULL OR m.发布时间=~'{time}.*') \
                                                           WITH DISTINCT path LIMIT {self.max_return} \
                                                           unwind nodes(path) as node unwind relationships(path) as rel \
-                                                          return distinct type(rel), properties(rel), labels(node)[0], properties(node)") # limit {self.max_return}
-                        else:
-                            sql_dict['path'].insert(0,  f"match path=(n)-[r:`{rel}`]-(m) WHERE n.name='{subject}' and \
-                                                            (m.发布时间 IS NULL OR m.发布时间=~'{time}.*') \
-                                                          WITH DISTINCT path LIMIT {self.max_return} \
-                                                          unwind nodes(path) as node unwind relationships(path) as rel \
-                                                          return distinct type(rel), properties(rel), labels(node)[0], properties(node)") # limit {self.max_return}
+                                                          return distinct type(rel), properties(rel), labels(node)[0], properties(node)"+help(time)]) # limit {self.max_return}
+                        elif rel == '控股':
+                            sql_dict['path'].insert(0, [f'{subject}在{time}的信息如下\n', f"match path=(n)-[r:`控股`]-(m) WHERE n.name='{subject}' and \
+                                    (m.发布时间 IS NULL OR m.发布时间=~'{time}.*') \
+                                    WITH DISTINCT path LIMIT {self.max_return} \
+                                    unwind nodes(path) as node unwind relationships(path) as rel \
+                                    return distinct type(rel), properties(rel), labels(node)[0], properties(node)"+help(time)]) # limit {self.max_return}
 
-                            sql_dict['path'].append(  f"match path=(n)-[r:`{rel}`]->(m)-[*0..2]-() WHERE (m.发布时间 IS NULL OR m.发布时间=~'{time}.*') and \
+                        else:
+                            sql_dict['path'].insert(0, [f'{subject}在{time}的{rel}信息如下\n', f"match path=(n)-[r:`{rel}`]->(m) WHERE n.name='{subject}' and \
+                                                            (m.发布时间 IS NULL OR m.发布时间=~'{time}.*') \
+                                                          WITH DISTINCT path LIMIT {self.max_return} \
+                                                          unwind nodes(path) as node unwind relationships(path) as rel \
+                                                          return distinct type(rel), properties(rel), labels(node)[0], properties(node)"+help(time)]) # limit {self.max_return}
+
+                            sql_dict['path'].append([f'{subject}在{time}的{rel}信息如下\n', f"match path=(n)-[r:`{rel}`]->(m)-[*0..2]-() WHERE (m.发布时间 IS NULL OR m.发布时间=~'{time}.*') and \
                                                         any(node IN nodes(path) where node.name='{subject}') \
                                                         WITH DISTINCT path LIMIT {self.max_return} \
                                                         unwind nodes(path) as node unwind relationships(path) as rel \
-                                                        return distinct type(rel), properties(rel), labels(node)[0], properties(node)") # 
+                                                        return distinct type(rel), properties(rel), labels(node)[0], properties(node)"+help(time)]) # 
                     if intent_match:
                         # 查询主体的2跳路径 是否包含意图中所表示的其中一个属性 
                         # sql_dict['path'].append( f"match path=(n)-[*1..2]-() where n.name='{subject}' \
@@ -225,23 +279,40 @@ class QuestionParser:
 
                         # 查询主体与意图实体的2跳路径
                         for intent in intent_match:
-                            # 查询是否存在该条路径 返回关系类型、关系属性、节点类型、节点属性   
-                            sql_dict['path'].append( f"match path=(n:`{subject_type}`)-[*1..2]-(m:`{intent}`)-[*0..1]-() where n.name='{subject}' and \
-                                                        all(node in nodes(path)[1..2] where (node.发布时间 is null or node.发布时间=~'{time}.*')) \
-                                                        WITH DISTINCT path LIMIT {self.max_return} \
-                                                        unwind nodes(path) as node unwind relationships(path) as rel \
-                                                        return distinct type(rel), properties(rel), labels(node)[0], properties(node)")
-                            # sql_dict['path'].append( f"match path=(n:`{subject_type}`)-[*1..2]-(m:`{intent}`)-[r]-(p) where n.name='{subject}' and \
-                            #                             any(node IN nodes(path) where node.发布时间=~'{time}.*') \
-                            #                             unwind nodes(path) as node unwind relationships(path) as rel \
-                            #                             return distinct type(r), properties(r), labels(p)[0], properties(p)")
+                            if intent == '个股':
+                                sql_dict['path'].append([f'{subject}在{time}的信息如下\n', f"match path=(n:`{subject_type}`)-[]-(m:`{intent}`) where n.name='{subject}' and \
+                                                            all(node in nodes(path) where (node.发布时间 is null or node.发布时间=~'{time}.*')) \
+                                                            WITH DISTINCT path LIMIT {self.max_return} \
+                                                            unwind nodes(path) as node unwind relationships(path) as rel \
+                                                            return distinct type(rel), properties(rel), labels(node)[0], properties(node)"+help(time)])
+
+                            else:
+                                # 查询是否存在该条路径 返回关系类型、关系属性、节点类型、节点属性   
+                                sql_dict['path'].append([f'{subject}在{time}的信息如下\n', f"match path=(n:`{subject_type}`)-[*1..2]-(m:`{intent}`)-[*0..1]-() where n.name='{subject}' and \
+                                                            all(node in nodes(path)[1..3] where (node.发布时间 is null or node.发布时间=~'{time}.*')) \
+                                                            WITH DISTINCT path LIMIT {self.max_return} \
+                                                            unwind nodes(path) as node unwind relationships(path) as rel \
+                                                            return distinct type(rel), properties(rel), labels(node)[0], properties(node)"+help(time)])
+                                # sql_dict['path'].append( f"match path=(n:`{subject_type}`)-[*1..2]-(m:`{intent}`)-[r]-(p) where n.name='{subject}' and \
+                                #                             any(node IN nodes(path) where node.发布时间=~'{time}.*') \
+                                #                             unwind nodes(path) as node unwind relationships(path) as rel \
+                                #                             return distinct type(r), properties(r), labels(p)[0], properties(p)")
             
                 for rel in single_path: # 按关系选择路径 不限制时间 有限制时间的查询结果将优先展示
-                    sql_dict['path'].append(  f"match path=(n)-[r:`{rel}`]->(m)-[*0..2]-() WHERE \
+                    sql_dict['path'].append([f'{subject}的{rel}信息如下\n', f"match path=(n)-[r:`{rel}`]->(m)-[*0..2]-() WHERE \
                                                 any(node IN nodes(path) where node.name='{subject}') \
                                                 WITH DISTINCT path LIMIT {self.max_return_2} \
                                                 unwind nodes(path) as node unwind relationships(path) as rel \
-                                                return distinct type(rel), properties(rel), labels(node)[0], properties(node)") #  limit {self.max_return}
+                                                return distinct type(rel), properties(rel), labels(node)[0], properties(node)"+help(time)]) #  limit {self.max_return}
 
-        return sql_dict
+        if not sql_dict: # 没有意图直接返回从主体出发的相关信息
+            for subject_type in ('个股', '行业'):
+                for subject in set(basic_ent.get(subject_type, [])):
+                    for time in basic_ent.get(f'财务指标_发布时间_{subject}', []):
+                            sql_dict['path'].insert(0, [f'{subject}在{time}的信息如下\n', f"match path=(n)-[*]-(m) WHERE n.name='{subject}' and \
+                                                            all(node in nodes(path) where node.发布时间 IS NULL OR node.发布时间=~'{time}.*') \
+                                                          WITH DISTINCT path LIMIT {self.max_return} \
+                                                          unwind nodes(path) as node unwind relationships(path) as rel \
+                                                          return distinct type(rel), properties(rel), labels(node)[0], properties(node)"+help(time)]) # limit {self.max_return}
+        return sql_dict  
                     
