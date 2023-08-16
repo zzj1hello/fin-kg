@@ -5,3 +5,4 @@ FR2KG/financial_research_reports/*
 /data*
 */img
 */log
+*/__pycache__/*

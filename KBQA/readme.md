@@ -48,4 +48,6 @@
 1. 先找到索引名 SHOW RANGE INDEXES WHERE owningConstraint IS NULL
 2. drop index 索引名
 
-- 关于fab
+- 评价 查询失败
+- 2个股 2年份 查询截断了一个个股的一个年份
+- 目前在30个问题上的查询速度和返回字符数  ![](./test-qa.png)
