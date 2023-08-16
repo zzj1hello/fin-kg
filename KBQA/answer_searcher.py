@@ -51,15 +51,14 @@ class AnswerSearcher:
                 self.rel_triple[rel].append([data['h'], data['t']])
                 self.rel_triple_hlt[data['h']].append(data['t'])
                 
-        # attr_data = self.g.run('CALL db.propertyKeys()').data()
-        # attr_pool = [item['propertyKey'] for item in attr_data]
+        attr_data = self.g.run('CALL db.propertyKeys()').data()
+        attr_pool = [item['propertyKey'] for item in attr_data]
 
-        # 股东信息的发布时间
-        # times = {}
-        # for tp, subject in ent_dict['主体'].values():
-        #     time = self.g.run(f"match (n:`{tp}`) where n.name='{subject}' return n.发布时间 as time").data()
-        #     times[subject] = 
-
+        # import json
+        # js = json.dumps(attr_pool, ensure_ascii=False)
+        # with open('attr_data.json', 'w') as file:
+        #     file.write(js)
+            
         self.knowledge = {'个股': stuck_pool, 'code': code_pool, '行业': industry_pool, '研报_发布时间': yanbao_time_pool, 
                      '财务指标_财报': season_pool, '财务指标_发布时间': fin_time_pool, '近一年': latest_time, '实体': ent_pool, 
                      "单节点属性": ent2attr, '关系': rel_pool, '关系三元组': self.rel_triple, '关系三元组辅助': self.rel_triple_hlt, '属性': attr_pool}

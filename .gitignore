@@ -3,3 +3,5 @@
 FR2KG/financial_research_reports/*
 *.pdf
 /data*
+*/img
+*/log
