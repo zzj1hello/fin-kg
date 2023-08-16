@@ -51,14 +51,17 @@ class AnswerSearcher:
                 self.rel_triple[rel].append([data['h'], data['t']])
                 self.rel_triple_hlt[data['h']].append(data['t'])
                 
-        attr_data = self.g.run('CALL db.propertyKeys()').data()
-        attr_pool = [item['propertyKey'] for item in attr_data]
+        # attr_data = self.g.run('CALL db.propertyKeys()').data()
+        # attr_pool = [item['propertyKey'] for item in attr_data]
 
         # import json
-        # js = json.dumps(attr_pool, ensure_ascii=False)
-        # with open('attr_data.json', 'w') as file:
+        # js = json.dumps(ent_pool, ensure_ascii=False)
+        # with open('ent_pool.json', 'w') as file:
         #     file.write(js)
-            
+        # js = json.dumps(rel_pool, ensure_ascii=False)
+        # with open('rel_pool.json', 'w') as file:
+        #     file.write(js)
+
         self.knowledge = {'个股': stuck_pool, 'code': code_pool, '行业': industry_pool, '研报_发布时间': yanbao_time_pool, 
                      '财务指标_财报': season_pool, '财务指标_发布时间': fin_time_pool, '近一年': latest_time, '实体': ent_pool, 
                      "单节点属性": ent2attr, '关系': rel_pool, '关系三元组': self.rel_triple, '关系三元组辅助': self.rel_triple_hlt, '属性': attr_pool}
@@ -708,6 +711,6 @@ if __name__ == '__main__':
     start = time.time()
     answer = AS.search_main(question, ent_dict)
     end = time.time()
-    print(1, end-start, len(answer))
+    print(32, end-start, len(answer))
     logging.info(answer)
 
